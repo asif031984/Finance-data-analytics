@@ -2,230 +2,216 @@ import dash
 from dash import dcc, html, Input, Output, State, dash_table
 import pandas as pd
 import plotly.express as px
-from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error, r2_score
-import base64
 import io
+import base64
+from datetime import datetime
 
+# Initialize the Dash app
 app = dash.Dash(__name__)
-server = app.server
+server = app.server  # for Azure deployment
 
+# App layout
 app.layout = html.Div([
-    html.H1("Finance Dashboard with Predictive Modeling"),
-    dcc.Tabs(id="tabs", value='tab-analytics', children=[
-        dcc.Tab(label='📊 Data Analytics', value='tab-analytics'),
-        dcc.Tab(label='🤖 Predictive Modeling', value='tab-modeling'),
-    ]),
-    html.Div(id='tabs-content')
+    html.H1("📊 Finance Dashboard with Excel Upload", style={"textAlign": "center"}),
+
+    dcc.Upload(
+        id='upload-data',
+        children=html.Div([
+            '📁 Drag and Drop or ',
+            html.A('Select Excel File')
+        ]),
+        style={
+            'width': '98%',
+            'height': '60px',
+            'lineHeight': '60px',
+            'borderWidth': '1px',
+            'borderStyle': 'dashed',
+            'borderRadius': '5px',
+            'textAlign': 'center',
+            'margin': '10px auto'
+        },
+        multiple=False
+    ),
+
+    html.Div(id='filter-container', children=[]),
+
+    html.Div(id='kpi-cards', style={'display': 'flex', 'justifyContent': 'space-around', 'marginTop': '20px'}),
+
+    dcc.Graph(id='line-chart'),
+    dcc.Graph(id='pie-chart'),
+
+    html.Button("⬇️ Download Filtered Data", id="download-button", n_clicks=0),
+    dcc.Download(id="download-dataframe-xlsx"),
+
+    html.Hr(),
+    html.H3("📋 Filtered Data Table"),
+    dash_table.DataTable(id='data-table', page_size=10, style_table={'overflowX': 'auto'})
 ])
 
-# Store uploaded data
+# Global store for uploaded data
 data_store = {}
 
-# Layout for Data Analytics Tab
-analytics_layout = html.Div([
-    dcc.Upload(
-        id='upload-data-analytics',
-        children=html.Div(['Drag and Drop or ', html.A('Select CSV File')]),
-        style={'width': '100%', 'height': '60px', 'lineHeight': '60px',
-               'borderWidth': '1px', 'borderStyle': 'dashed',
-               'borderRadius': '5px', 'textAlign': 'center'},
-        multiple=False
-    ),
-    html.Div(id='file-name-analytics'),
-    html.Div([
-        html.Label("Filter by Channel"),
-        dcc.Dropdown(id='channel-filter', multi=True),
-        html.Label("Filter by Branch"),
-        dcc.Dropdown(id='branch-filter', multi=True),
-        html.Label("Filter by City"),
-        dcc.Dropdown(id='city-filter', multi=True),
-        html.Label("Filter by Category"),
-        dcc.Dropdown(id='category-filter', multi=True),
-        html.Label("Filter by Sub Category"),
-        dcc.Dropdown(id='subcategory-filter', multi=True),
-        html.Label("Filter by Item Name"),
-        dcc.Dropdown(id='item-filter', multi=True),
-        html.Label("Filter by Date Range"),
-        dcc.DatePickerRange(id='date-filter')
-    ], style={'columnCount': 2}),
-    dcc.Graph(id='analytics-chart'),
-    dash_table.DataTable(id='analytics-table',
-                         page_size=10,
-                         style_table={'overflowX': 'auto'},
-                         style_cell={'textAlign': 'left'})
-])
-
-# Layout for Predictive Modeling Tab
-modeling_layout = html.Div([
-    dcc.Upload(
-        id='upload-data-modeling',
-        children=html.Div(['Drag and Drop or ', html.A('Select CSV File')]),
-        style={'width': '100%', 'height': '60px', 'lineHeight': '60px',
-               'borderWidth': '1px', 'borderStyle': 'dashed',
-               'borderRadius': '5px', 'textAlign': 'center'},
-        multiple=False
-    ),
-    html.Div(id='file-name-modeling'),
-    html.Div([
-        html.Label("Select Feature Columns"),
-        dcc.Dropdown(id='feature-columns', multi=True),
-        html.Label("Select Target Column"),
-        dcc.Dropdown(id='target-column'),
-        html.Button("Train Model", id='train-button', n_clicks=0)
-    ]),
-    html.Div(id='model-output'),
-    dcc.Graph(id='prediction-chart'),
-    dash_table.DataTable(id='prediction-table',
-                         page_size=10,
-                         style_table={'overflowX': 'auto'},
-                         style_cell={'textAlign': 'left'})
-])
-
-@app.callback(Output('tabs-content', 'children'),
-              Input('tabs', 'value'))
-def render_content(tab):
-    if tab == 'tab-analytics':
-        return analytics_layout
-    elif tab == 'tab-modeling':
-        return modeling_layout
-
+# Callback to parse uploaded Excel and generate filters
 @app.callback(
-    Output('file-name-analytics', 'children'),
-    Output('channel-filter', 'options'),
-    Output('branch-filter', 'options'),
-    Output('city-filter', 'options'),
-    Output('category-filter', 'options'),
-    Output('subcategory-filter', 'options'),
-    Output('item-filter', 'options'),
-    Output('date-filter', 'start_date'),
-    Output('date-filter', 'end_date'),
-    Input('upload-data-analytics', 'contents'),
-    State('upload-data-analytics', 'filename')
+    Output('filter-container', 'children'),
+    Input('upload-data', 'contents'),
+    State('upload-data', 'filename')
 )
-def update_analytics_filters(contents, filename):
+def update_filters(contents, filename):
     if contents is None:
-        return "", [], [], [], [], [], [], None, None
+        return []
 
     content_type, content_string = contents.split(',')
     decoded = base64.b64decode(content_string)
-    df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
-    data_store['analytics'] = df
+    df = pd.read_excel(io.BytesIO(decoded), engine='openpyxl')
 
-    options = lambda col: [{'label': i, 'value': i} for i in sorted(df[col].dropna().unique())] if col in df else []
+    # Store in global variable
+    data_store['df'] = df
 
-    start_date = pd.to_datetime(df['Doc Date']).min() if 'Doc Date' in df else None
-    end_date = pd.to_datetime(df['Doc Date']).max() if 'Doc Date' in df else None
+    # Convert Doc Date to datetime
+    if 'Doc Date' in df.columns:
+        df['Doc Date'] = pd.to_datetime(df['Doc Date'], errors='coerce')
 
-    return f"Uploaded: {filename}", options('Channel'), options('Branch'), options('City'), options('Category'), options('Sub Category'), options('Item Name'), start_date, end_date
+    filters = [
+        html.Div([
+            html.Label("📅 Date Range"),
+            dcc.DatePickerRange(
+                id='date-range',
+                min_date_allowed=df['Doc Date'].min(),
+                max_date_allowed=df['Doc Date'].max(),
+                start_date=df['Doc Date'].min(),
+                end_date=df['Doc Date'].max()
+            )
+        ], style={'margin': '10px'}),
 
+        html.Div([
+            html.Label("📦 Channel"),
+            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['Channel'].dropna().unique())],
+                         id='channel-filter', multi=True)
+        ], style={'margin': '10px'}),
+
+        html.Div([
+            html.Label("🏢 Branch"),
+            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['Branch'].dropna().unique())],
+                         id='branch-filter', multi=True)
+        ], style={'margin': '10px'}),
+
+        html.Div([
+            html.Label("🏙️ City"),
+            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['City'].dropna().unique())],
+                         id='city-filter', multi=True)
+        ], style={'margin': '10px'}),
+
+        html.Div([
+            html.Label("👤 Customer Name"),
+            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['Customer Name'].dropna().unique())],
+                         id='customer-filter', multi=True)
+        ], style={'margin': '10px'}),
+
+        html.Div([
+            html.Label("📂 Category"),
+            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['Category'].dropna().unique())],
+                         id='category-filter', multi=True)
+        ], style={'margin': '10px'}),
+
+        html.Div([
+            html.Label("📁 Sub Category"),
+            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['Sub Category'].dropna().unique())],
+                         id='subcategory-filter', multi=True)
+        ], style={'margin': '10px'}),
+
+        html.Div([
+            html.Label("🛒 Item Name"),
+            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['Item Name'].dropna().unique())],
+                         id='item-filter', multi=True)
+        ], style={'margin': '10px'})
+    ]
+
+    return filters
+
+# Callback to update charts, KPIs, and table
 @app.callback(
-    Output('analytics-chart', 'figure'),
-    Output('analytics-table', 'data'),
-    Output('analytics-table', 'columns'),
+    Output('line-chart', 'figure'),
+    Output('pie-chart', 'figure'),
+    Output('data-table', 'data'),
+    Output('data-table', 'columns'),
+    Output('kpi-cards', 'children'),
+    Input('date-range', 'start_date'),
+    Input('date-range', 'end_date'),
     Input('channel-filter', 'value'),
     Input('branch-filter', 'value'),
     Input('city-filter', 'value'),
+    Input('customer-filter', 'value'),
     Input('category-filter', 'value'),
     Input('subcategory-filter', 'value'),
-    Input('item-filter', 'value'),
-    Input('date-filter', 'start_date'),
-    Input('date-filter', 'end_date')
+    Input('item-filter', 'value')
 )
-def update_analytics_output(channel, branch, city, category, subcategory, item, start_date, end_date):
-    df = data_store.get('analytics')
-    if df is None:
-        return {}, [], []
+def update_outputs(start_date, end_date, channel, branch, city, customer, category, subcategory, item):
+    if 'df' not in data_store:
+        return dash.no_update
 
-    df['Doc Date'] = pd.to_datetime(df['Doc Date'], errors='coerce')
+    df = data_store['df']
+
+    # Apply filters
     if start_date and end_date:
         df = df[(df['Doc Date'] >= start_date) & (df['Doc Date'] <= end_date)]
+    if channel:
+        df = df[df['Channel'].isin(channel)]
+    if branch:
+        df = df[df['Branch'].isin(branch)]
+    if city:
+        df = df[df['City'].isin(city)]
+    if customer:
+        df = df[df['Customer Name'].isin(customer)]
+    if category:
+        df = df[df['Category'].isin(category)]
+    if subcategory:
+        df = df[df['Sub Category'].isin(subcategory)]
+    if item:
+        df = df[df['Item Name'].isin(item)]
 
-    filters = {
-        'Channel': channel,
-        'Branch': branch,
-        'City': city,
-        'Category': category,
-        'Sub Category': subcategory,
-        'Item Name': item
-    }
+    # KPI Cards
+    total_qty = df['Qty'].sum() if 'Qty' in df.columns else 0
+    total_price = df['Total Price'].sum() if 'Total Price' in df.columns else 0
 
-    for col, val in filters.items():
-        if val and col in df:
-            df = df[df[col].isin(val)]
+    kpis = [
+        html.Div([
+            html.H4("📦 Total Quantity"),
+            html.H2(f"{total_qty:,.0f}")
+        ], style={'padding': '10px', 'border': '1px solid #ccc', 'borderRadius': '5px'}),
 
-    if 'Channel' in df and 'Total Price' in df:
-        fig = px.bar(df, x='Channel', y='Total Price', color='Category', title='Total Price by Channel and Category')
-    else:
-        fig = {}
+        html.Div([
+            html.H4("💰 Total Price"),
+            html.H2(f"{total_price:,.2f}")
+        ], style={'padding': '10px', 'border': '1px solid #ccc', 'borderRadius': '5px'})
+    ]
 
-    table_data = df.to_dict('records')
-    table_columns = [{"name": i, "id": i} for i in df.columns]
+    # Line Chart
+    line_fig = px.line(df, x='Doc Date', y='Total Price', title="Total Price Over Time") if 'Doc Date' in df.columns and 'Total Price' in df.columns else {}
 
-    return fig, table_data, table_columns
+    # Pie Chart
+    pie_fig = px.pie(df, names='Category', values='Total Price', title="Total Price by Category") if 'Category' in df.columns and 'Total Price' in df.columns else {}
 
+    # Data Table
+    columns = [{"name": i, "id": i} for i in df.columns]
+    data = df.to_dict('records')
+
+    # Store filtered data for download
+    data_store['filtered'] = df
+
+    return line_fig, pie_fig, data, columns, kpis
+
+# Callback to download filtered data
 @app.callback(
-    Output('file-name-modeling', 'children'),
-    Output('feature-columns', 'options'),
-    Output('target-column', 'options'),
-    Input('upload-data-modeling', 'contents'),
-    State('upload-data-modeling', 'filename')
+    Output("download-dataframe-xlsx", "data"),
+    Input("download-button", "n_clicks"),
+    prevent_initial_call=True
 )
-def update_modeling_inputs(contents, filename):
-    if contents is None:
-        return "", [], []
+def download_filtered_data(n_clicks):
+    if 'filtered' in data_store:
+        df = data_store['filtered']
+        return dcc.send_data_frame(df.to_excel, "filtered_data.xlsx", index=False)
 
-    content_type, content_string = contents.split(',')
-    decoded = base64.b64decode(content_string)
-    df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
-    data_store['modeling'] = df
-
-    options = [{'label': col, 'value': col} for col in df.columns]
-    return f"Uploaded: {filename}", options, options
-
-@app.callback(
-    Output('model-output', 'children'),
-    Output('prediction-chart', 'figure'),
-    Output('prediction-table', 'data'),
-    Output('prediction-table', 'columns'),
-    Input('train-button', 'n_clicks'),
-    State('feature-columns', 'value'),
-    State('target-column', 'value')
-)
-def train_model(n_clicks, features, target):
-    if n_clicks == 0 or not features or not target:
-        return "", {}, [], []
-
-    df = data_store.get('modeling')
-    if df is None or any(col not in df for col in features + [target]):
-        return "Invalid data or columns", {}, [], []
-
-    df = df.dropna(subset=features + [target])
-    X = df[features]
-    y = df[target]
-
-    try:
-        X = X.apply(pd.to_numeric)
-        y = pd.to_numeric(y)
-    except:
-        return "Non-numeric data found. Please select numeric columns.", {}, [], []
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    model = LinearRegression()
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
-
-    mse = mean_squared_error(y_test, y_pred)
-    r2 = r2_score(y_test, y_pred)
-
-    result_df = X_test.copy()
-    result_df['Actual'] = y_test
-    result_df['Predicted'] = y_pred
-
-    fig = px.scatter(result_df, x='Actual', y='Predicted', title='Actual vs Predicted')
-
-    return f"Model Trained. MSE: {mse:.2f}, R²: {r2:.2f}", fig, result_df.to_dict('records'), [{"name": i, "id": i} for i in result_df.columns]
-
+# Run the app
 if __name__ == '__main__':
-    app.run_server(debug=False, host='0.0.0.0', port=8000)
+    app.run_server(debug=False, host="0.0.0.0", port=8000)
