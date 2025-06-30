@@ -2,18 +2,17 @@ import dash
 from dash import dcc, html, Input, Output, State, dash_table
 import pandas as pd
 import plotly.express as px
-import io
 import base64
-from datetime import datetime
+import io
 
 # Initialize the Dash app
 app = dash.Dash(__name__)
 server = app.server  # for Azure deployment
 
-# App layout
+# Layout of the app
 app.layout = html.Div([
-    html.H1("📊 Finance Dashboard with Excel Upload", style={"textAlign": "center"}),
-
+    html.H2("Finance Dashboard with Rep Reporting"),
+    
     dcc.Upload(
         id='upload-data',
         children=html.Div([
@@ -21,140 +20,123 @@ app.layout = html.Div([
             html.A('Select Excel File')
         ]),
         style={
-            'width': '98%',
-            'height': '60px',
-            'lineHeight': '60px',
-            'borderWidth': '1px',
-            'borderStyle': 'dashed',
-            'borderRadius': '5px',
-            'textAlign': 'center',
-            'margin': '10px auto'
+            'width': '100%', 'height': '60px', 'lineHeight': '60px',
+            'borderWidth': '1px', 'borderStyle': 'dashed',
+            'borderRadius': '5px', 'textAlign': 'center',
+            'margin': '10px'
         },
         multiple=False
     ),
 
-    html.Div(id='filter-container', children=[]),
+    html.Div(id='file-name', style={'margin': '10px', 'fontWeight': 'bold'}),
 
-    html.Div(id='kpi-cards', style={'display': 'flex', 'justifyContent': 'space-around', 'marginTop': '20px'}),
+    html.Div([
+        html.Div([
+            html.Label("Rep Person Name"),
+            dcc.Dropdown(id='rep-filter', multi=True)
+        ], style={'width': '24%', 'display': 'inline-block'}),
 
-    dcc.Graph(id='line-chart'),
-    dcc.Graph(id='pie-chart'),
+        html.Div([
+            html.Label("Channel"),
+            dcc.Dropdown(id='channel-filter', multi=True)
+        ], style={'width': '24%', 'display': 'inline-block'}),
 
-    html.Button("⬇️ Download Filtered Data", id="download-button", n_clicks=0),
-    dcc.Download(id="download-dataframe-xlsx"),
+        html.Div([
+            html.Label("Branch"),
+            dcc.Dropdown(id='branch-filter', multi=True)
+        ], style={'width': '24%', 'display': 'inline-block'}),
 
-    html.Hr(),
-    html.H3("📋 Filtered Data Table"),
-    dash_table.DataTable(id='data-table', page_size=10, style_table={'overflowX': 'auto'})
+        html.Div([
+            html.Label("City"),
+            dcc.Dropdown(id='city-filter', multi=True)
+        ], style={'width': '24%', 'display': 'inline-block'}),
+    ], style={'marginTop': '10px'}),
+
+    html.Div([
+        html.Div([
+            html.Label("Customer Name"),
+            dcc.Dropdown(id='customer-filter', multi=True)
+        ], style={'width': '32%', 'display': 'inline-block'}),
+
+        html.Div([
+            html.Label("Category"),
+            dcc.Dropdown(id='category-filter', multi=True)
+        ], style={'width': '32%', 'display': 'inline-block'}),
+
+        html.Div([
+            html.Label("Sub Category"),
+            dcc.Dropdown(id='subcategory-filter', multi=True)
+        ], style={'width': '32%', 'display': 'inline-block'}),
+    ], style={'marginTop': '10px'}),
+
+    dcc.Graph(id='bar-chart', style={'marginTop': '20px'}),
+    dash_table.DataTable(id='data-table', page_size=10, style_table={'overflowX': 'auto'}),
+
+    dcc.Store(id='stored-data')
 ])
 
-# Global store for uploaded data
-data_store = {}
-
-# Callback to parse uploaded Excel and generate filters
+# Callback to parse uploaded Excel file and store data
 @app.callback(
-    Output('filter-container', 'children'),
+    Output('stored-data', 'data'),
+    Output('file-name', 'children'),
     Input('upload-data', 'contents'),
     State('upload-data', 'filename')
 )
-def update_filters(contents, filename):
+def parse_upload(contents, filename):
     if contents is None:
-        return []
-
+        return dash.no_update, ""
     content_type, content_string = contents.split(',')
     decoded = base64.b64decode(content_string)
     df = pd.read_excel(io.BytesIO(decoded), engine='openpyxl')
+    return df.to_dict('records'), f"Uploaded File: {filename}"
 
-    # Store in global variable
-    data_store['df'] = df
-
-    # Convert Doc Date to datetime
-    if 'Doc Date' in df.columns:
-        df['Doc Date'] = pd.to_datetime(df['Doc Date'], errors='coerce')
-
-    filters = [
-        html.Div([
-            html.Label("📅 Date Range"),
-            dcc.DatePickerRange(
-                id='date-range',
-                min_date_allowed=df['Doc Date'].min(),
-                max_date_allowed=df['Doc Date'].max(),
-                start_date=df['Doc Date'].min(),
-                end_date=df['Doc Date'].max()
-            )
-        ], style={'margin': '10px'}),
-
-        html.Div([
-            html.Label("📦 Channel"),
-            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['Channel'].dropna().unique())],
-                         id='channel-filter', multi=True)
-        ], style={'margin': '10px'}),
-
-        html.Div([
-            html.Label("🏢 Branch"),
-            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['Branch'].dropna().unique())],
-                         id='branch-filter', multi=True)
-        ], style={'margin': '10px'}),
-
-        html.Div([
-            html.Label("🏙️ City"),
-            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['City'].dropna().unique())],
-                         id='city-filter', multi=True)
-        ], style={'margin': '10px'}),
-
-        html.Div([
-            html.Label("👤 Customer Name"),
-            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['Customer Name'].dropna().unique())],
-                         id='customer-filter', multi=True)
-        ], style={'margin': '10px'}),
-
-        html.Div([
-            html.Label("📂 Category"),
-            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['Category'].dropna().unique())],
-                         id='category-filter', multi=True)
-        ], style={'margin': '10px'}),
-
-        html.Div([
-            html.Label("📁 Sub Category"),
-            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['Sub Category'].dropna().unique())],
-                         id='subcategory-filter', multi=True)
-        ], style={'margin': '10px'}),
-
-        html.Div([
-            html.Label("🛒 Item Name"),
-            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['Item Name'].dropna().unique())],
-                         id='item-filter', multi=True)
-        ], style={'margin': '10px'})
+# Callback to populate dropdowns based on uploaded data
+@app.callback(
+    Output('rep-filter', 'options'),
+    Output('channel-filter', 'options'),
+    Output('branch-filter', 'options'),
+    Output('city-filter', 'options'),
+    Output('customer-filter', 'options'),
+    Output('category-filter', 'options'),
+    Output('subcategory-filter', 'options'),
+    Input('stored-data', 'data')
+)
+def populate_filters(data):
+    if data is None:
+        return [[]]*7
+    df = pd.DataFrame(data)
+    return [
+        [{'label': i, 'value': i} for i in sorted(df['Rep Person Name'].dropna().unique())],
+        [{'label': i, 'value': i} for i in sorted(df['Channel'].dropna().unique())],
+        [{'label': i, 'value': i} for i in sorted(df['Branch'].dropna().unique())],
+        [{'label': i, 'value': i} for i in sorted(df['City'].dropna().unique())],
+        [{'label': i, 'value': i} for i in sorted(df['Customer Name'].dropna().unique())],
+        [{'label': i, 'value': i} for i in sorted(df['Category'].dropna().unique())],
+        [{'label': i, 'value': i} for i in sorted(df['Sub Category'].dropna().unique())],
     ]
 
-    return filters
-
-# Callback to update charts, KPIs, and table
+# Callback to update chart and table based on filters
 @app.callback(
-    Output('line-chart', 'figure'),
-    Output('pie-chart', 'figure'),
+    Output('bar-chart', 'figure'),
     Output('data-table', 'data'),
     Output('data-table', 'columns'),
-    Output('kpi-cards', 'children'),
-    Input('date-range', 'start_date'),
-    Input('date-range', 'end_date'),
+    Input('stored-data', 'data'),
+    Input('rep-filter', 'value'),
     Input('channel-filter', 'value'),
     Input('branch-filter', 'value'),
     Input('city-filter', 'value'),
     Input('customer-filter', 'value'),
     Input('category-filter', 'value'),
-    Input('subcategory-filter', 'value'),
-    Input('item-filter', 'value')
+    Input('subcategory-filter', 'value')
 )
-def update_outputs(start_date, end_date, channel, branch, city, customer, category, subcategory, item):
-    if 'df' not in data_store:
-        return dash.no_update
-
-    df = data_store['df']
+def update_output(data, rep, channel, branch, city, customer, category, subcat):
+    if data is None:
+        return {}, [], []
+    df = pd.DataFrame(data)
 
     # Apply filters
-    if start_date and end_date:
-        df = df[(df['Doc Date'] >= start_date) & (df['Doc Date'] <= end_date)]
+    if rep:
+        df = df[df['Rep Person Name'].isin(rep)]
     if channel:
         df = df[df['Channel'].isin(channel)]
     if branch:
@@ -165,53 +147,21 @@ def update_outputs(start_date, end_date, channel, branch, city, customer, catego
         df = df[df['Customer Name'].isin(customer)]
     if category:
         df = df[df['Category'].isin(category)]
-    if subcategory:
-        df = df[df['Sub Category'].isin(subcategory)]
-    if item:
-        df = df[df['Item Name'].isin(item)]
+    if subcat:
+        df = df[df['Sub Category'].isin(subcat)]
 
-    # KPI Cards
-    total_qty = df['Qty'].sum() if 'Qty' in df.columns else 0
-    total_price = df['Total Price'].sum() if 'Total Price' in df.columns else 0
+    # Create bar chart
+    if not df.empty:
+        fig = px.bar(df, x='Rep Person Name', y='Total Price', color='Category', barmode='group',
+                     title='Total Price by Rep and Category')
+    else:
+        fig = px.bar(title='No data to display')
 
-    kpis = [
-        html.Div([
-            html.H4("📦 Total Quantity"),
-            html.H2(f"{total_qty:,.0f}")
-        ], style={'padding': '10px', 'border': '1px solid #ccc', 'borderRadius': '5px'}),
-
-        html.Div([
-            html.H4("💰 Total Price"),
-            html.H2(f"{total_price:,.2f}")
-        ], style={'padding': '10px', 'border': '1px solid #ccc', 'borderRadius': '5px'})
-    ]
-
-    # Line Chart
-    line_fig = px.line(df, x='Doc Date', y='Total Price', title="Total Price Over Time") if 'Doc Date' in df.columns and 'Total Price' in df.columns else {}
-
-    # Pie Chart
-    pie_fig = px.pie(df, names='Category', values='Total Price', title="Total Price by Category") if 'Category' in df.columns and 'Total Price' in df.columns else {}
-
-    # Data Table
+    # Prepare data table
     columns = [{"name": i, "id": i} for i in df.columns]
-    data = df.to_dict('records')
-
-    # Store filtered data for download
-    data_store['filtered'] = df
-
-    return line_fig, pie_fig, data, columns, kpis
-
-# Callback to download filtered data
-@app.callback(
-    Output("download-dataframe-xlsx", "data"),
-    Input("download-button", "n_clicks"),
-    prevent_initial_call=True
-)
-def download_filtered_data(n_clicks):
-    if 'filtered' in data_store:
-        df = data_store['filtered']
-        return dcc.send_data_frame(df.to_excel, "filtered_data.xlsx", index=False)
+    return fig, df.to_dict('records'), columns
 
 # Run the app
 if __name__ == '__main__':
-    app.run_server(debug=False, host="0.0.0.0", port=8000)
+    app.run_server(debug=False, host='0.0.0.0', port=8000)
+
