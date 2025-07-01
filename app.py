@@ -1,18 +1,26 @@
+# The previous code failed because the 'dash' module is not available in this environment.
+# However, I can generate a downloadable Python file with the complete Dash app code as requested.
+
+# Let's write the Dash app code to a file named 'advanced_sales_dashboard.py'
+
+dash_app_code = '''
 import dash
 from dash import dcc, html, Input, Output, State, dash_table
 import pandas as pd
 import plotly.express as px
 import io
 import base64
-from datetime import datetime
 
 # Initialize the Dash app
 app = dash.Dash(__name__)
 server = app.server  # for Azure deployment
 
+# Global store for uploaded data
+data_store = {}
+
 # App layout
 app.layout = html.Div([
-    html.H1("📊 Finance Dashboard with Excel Upload", style={"textAlign": "center"}),
+    html.H1("📊 Sales Dashboard with Advanced Filters", style={"textAlign": "center"}),
 
     dcc.Upload(
         id='upload-data',
@@ -35,21 +43,26 @@ app.layout = html.Div([
 
     html.Div(id='filter-container', children=[]),
 
-    html.Div(id='kpi-cards', style={'display': 'flex', 'justifyContent': 'space-around', 'marginTop': '20px'}),
+    html.Div([
+        html.Label("📌 Include Item Name in Summary Table"),
+        dcc.Checklist(
+            options=[{'label': 'Include Item Name', 'value': 'include_item'}],
+            value=[],
+            id='include-item-checklist',
+            inline=True
+        )
+    ], style={'margin': '10px'}),
 
-    dcc.Graph(id='line-chart'),
-    dcc.Graph(id='pie-chart'),
-
-    html.Button("⬇️ Download Filtered Data", id="download-button", n_clicks=0),
+    html.Button("⬇️ Download Summary Data", id="download-button", n_clicks=0),
     dcc.Download(id="download-dataframe-xlsx"),
 
-    html.Hr(),
-    html.H3("📋 Filtered Data Table"),
-    dash_table.DataTable(id='data-table', page_size=10, style_table={'overflowX': 'auto'})
-])
+    dcc.Graph(id='bar-chart'),
+    dcc.Graph(id='pie-chart'),
 
-# Global store for uploaded data
-data_store = {}
+    html.Hr(),
+    html.H3("📋 Monthly Summary Table"),
+    dash_table.DataTable(id='summary-table', page_size=12, style_table={'overflowX': 'auto'})
+])
 
 # Callback to parse uploaded Excel and generate filters
 @app.callback(
@@ -72,146 +85,112 @@ def update_filters(contents, filename):
     if 'Doc Date' in df.columns:
         df['Doc Date'] = pd.to_datetime(df['Doc Date'], errors='coerce')
 
-    filters = [
-        html.Div([
-            html.Label("📅 Date Range"),
-            dcc.DatePickerRange(
-                id='date-range',
-                min_date_allowed=df['Doc Date'].min(),
-                max_date_allowed=df['Doc Date'].max(),
-                start_date=df['Doc Date'].min(),
-                end_date=df['Doc Date'].max()
-            )
-        ], style={'margin': '10px'}),
-
-        html.Div([
-            html.Label("📦 Channel"),
-            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['Channel'].dropna().unique())],
-                         id='channel-filter', multi=True)
-        ], style={'margin': '10px'}),
-
-        html.Div([
-            html.Label("🏢 Branch"),
-            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['Branch'].dropna().unique())],
-                         id='branch-filter', multi=True)
-        ], style={'margin': '10px'}),
-
-        html.Div([
-            html.Label("🏙️ City"),
-            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['City'].dropna().unique())],
-                         id='city-filter', multi=True)
-        ], style={'margin': '10px'}),
-
-        html.Div([
-            html.Label("👤 Customer Name"),
-            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['Customer Name'].dropna().unique())],
-                         id='customer-filter', multi=True)
-        ], style={'margin': '10px'}),
-
-        html.Div([
-            html.Label("📂 Category"),
-            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['Category'].dropna().unique())],
-                         id='category-filter', multi=True)
-        ], style={'margin': '10px'}),
-
-        html.Div([
-            html.Label("📁 Sub Category"),
-            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['Sub Category'].dropna().unique())],
-                         id='subcategory-filter', multi=True)
-        ], style={'margin': '10px'}),
-
-        html.Div([
-            html.Label("🛒 Item Name"),
-            dcc.Dropdown(options=[{'label': i, 'value': i} for i in sorted(df['Item Name'].dropna().unique())],
-                         id='item-filter', multi=True)
-        ], style={'margin': '10px'})
+    filters = []
+    filter_columns = [
+        'Rep Person Name', 'Channel', 'Branch', 'City',
+        'Customer Name', 'Category', 'Sub Category', 'SKU Family', 'Item Name'
     ]
+
+    for col in filter_columns:
+        if col in df.columns:
+            filters.append(html.Div([
+                html.Label(col),
+                dcc.Dropdown(
+                    options=[{'label': i, 'value': i} for i in sorted(df[col].dropna().unique())],
+                    id=f'filter-{col.replace(" ", "-").lower()}',
+                    multi=True
+                )
+            ], style={'margin': '10px'}))
 
     return filters
 
-# Callback to update charts, KPIs, and table
+# Callback to update charts and summary table
 @app.callback(
-    Output('line-chart', 'figure'),
+    Output('bar-chart', 'figure'),
     Output('pie-chart', 'figure'),
-    Output('data-table', 'data'),
-    Output('data-table', 'columns'),
-    Output('kpi-cards', 'children'),
-    Input('date-range', 'start_date'),
-    Input('date-range', 'end_date'),
-    Input('channel-filter', 'value'),
-    Input('branch-filter', 'value'),
-    Input('city-filter', 'value'),
-    Input('customer-filter', 'value'),
-    Input('category-filter', 'value'),
-    Input('subcategory-filter', 'value'),
-    Input('item-filter', 'value')
+    Output('summary-table', 'data'),
+    Output('summary-table', 'columns'),
+    Input('include-item-checklist', 'value'),
+    Input('filter-rep-person-name', 'value'),
+    Input('filter-channel', 'value'),
+    Input('filter-branch', 'value'),
+    Input('filter-city', 'value'),
+    Input('filter-customer-name', 'value'),
+    Input('filter-category', 'value'),
+    Input('filter-sub-category', 'value'),
+    Input('filter-sku-family', 'value'),
+    Input('filter-item-name', 'value')
 )
-def update_outputs(start_date, end_date, channel, branch, city, customer, category, subcategory, item):
+def update_outputs(include_item, rep, channel, branch, city, customer, category, subcat, sku, item):
     if 'df' not in data_store:
-        return dash.no_update
+        return {}, {}, [], []
 
     df = data_store['df']
 
     # Apply filters
-    if start_date and end_date:
-        df = df[(df['Doc Date'] >= start_date) & (df['Doc Date'] <= end_date)]
-    if channel:
-        df = df[df['Channel'].isin(channel)]
-    if branch:
-        df = df[df['Branch'].isin(branch)]
-    if city:
-        df = df[df['City'].isin(city)]
-    if customer:
-        df = df[df['Customer Name'].isin(customer)]
-    if category:
-        df = df[df['Category'].isin(category)]
-    if subcategory:
-        df = df[df['Sub Category'].isin(subcategory)]
-    if item:
-        df = df[df['Item Name'].isin(item)]
+    filters = {
+        'Rep Person Name': rep,
+        'Channel': channel,
+        'Branch': branch,
+        'City': city,
+        'Customer Name': customer,
+        'Category': category,
+        'Sub Category': subcat,
+        'SKU Family': sku,
+        'Item Name': item
+    }
 
-    # KPI Cards
-    total_qty = df['Qty'].sum() if 'Qty' in df.columns else 0
-    total_price = df['Total Price'].sum() if 'Total Price' in df.columns else 0
+    for col, val in filters.items():
+        if val:
+            df = df[df[col].isin(val)]
 
-    kpis = [
-        html.Div([
-            html.H4("📦 Total Quantity"),
-            html.H2(f"{total_qty:,.0f}")
-        ], style={'padding': '10px', 'border': '1px solid #ccc', 'borderRadius': '5px'}),
+    # Ensure Doc Date is datetime
+    if 'Doc Date' in df.columns:
+        df['Month'] = df['Doc Date'].dt.to_period('M').astype(str)
 
-        html.Div([
-            html.H4("💰 Total Price"),
-            html.H2(f"{total_price:,.2f}")
-        ], style={'padding': '10px', 'border': '1px solid #ccc', 'borderRadius': '5px'})
-    ]
+    # Create pivot summary
+    group_cols = ['Month']
+    if 'include_item' in include_item:
+        group_cols.append('Item Name')
 
-    # Line Chart
-    line_fig = px.line(df, x='Doc Date', y='Total Price', title="Total Price Over Time") if 'Doc Date' in df.columns and 'Total Price' in df.columns else {}
+    summary = df.groupby(group_cols).agg({
+        'Qty': 'sum',
+        'Total Price': 'sum'
+    }).reset_index()
 
-    # Pie Chart
-    pie_fig = px.pie(df, names='Category', values='Total Price', title="Total Price by Category") if 'Category' in df.columns and 'Total Price' in df.columns else {}
+    # Bar chart
+    bar_fig = px.bar(summary, x='Month', y='Total Price', color='Month', title="Monthly Total Price")
 
-    # Data Table
-    columns = [{"name": i, "id": i} for i in df.columns]
-    data = df.to_dict('records')
+    # Pie chart
+    pie_fig = px.pie(df, names='Category', values='Total Price', title="Total Price by Category") if 'Category' in df.columns else {}
 
-    # Store filtered data for download
-    data_store['filtered'] = df
+    # Data table
+    columns = [{"name": i, "id": i} for i in summary.columns]
+    data = summary.to_dict('records')
 
-    return line_fig, pie_fig, data, columns, kpis
+    # Store for download
+    data_store['summary'] = summary
 
-# Callback to download filtered data
+    return bar_fig, pie_fig, data, columns
+
+# Callback to download summary data
 @app.callback(
     Output("download-dataframe-xlsx", "data"),
     Input("download-button", "n_clicks"),
     prevent_initial_call=True
 )
-def download_filtered_data(n_clicks):
-    if 'filtered' in data_store:
-        df = data_store['filtered']
-        return dcc.send_data_frame(df.to_excel, "filtered_data.xlsx", index=False)
+def download_summary_data(n_clicks):
+    if 'summary' in data_store:
+        df = data_store['summary']
+        return dcc.send_data_frame(df.to_excel, "summary_data.xlsx", index=False)
 
 # Run the app
 if __name__ == '__main__':
     app.run_server(debug=False, host="0.0.0.0", port=8000)
+'''
+
+# Write the code to a Python file
+with open("advanced_sales_dashboard.py", "w") as f:
+    f.write(dash_app_code)
+
+print("Dash app code has been written to 'advanced_sales_dashboard.py'.")
